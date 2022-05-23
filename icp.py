@@ -1,85 +1,9 @@
-#!/usr/bin/env python
-# coding: utf-8
-
-# # ICP #
-# This notebook is all about ICP and it's different implementations. It should be visual and self - descriptive.
-# 
-# - Point cloud alignment
-# - Tech in order to align to point out with each other
-# - **Estimate the transformation** to **move one cloud so that it is aligned with the other one.**
-# 
-# ##### 2 steps
-# 1. data association
-# - correspondences : 가장 가까운 closet point 찾아라
-# 2. transformation 
-# - minimize the distance between point pairs (corresponding points)
-# 
-# 1,2 과정 반복
-# 
-# ### Solution for computing the Rigid Body Transform
-# ![image.png](attachment:image.png)
-# point y - point x transformed into the reference frame 
-# x를 y frame으로 옮겨 두 포인트 사이의 error를 최소화하는 것
-# 
-# 
-# ![image-2.png](attachment:image-2.png)
-# find roation matrix and translation vector so that two overlap  
-# red curve is transformed into the blue curve
-# 
-# correspondences 있는 point만 집중하나봐
-# 
-# 
-# ![image-3.png](attachment:image-3.png)
-# 람다 scale paramter 인데 지금은 필요 없어
-# 
-# 
-# ![image-4.png](attachment:image-4.png)
-# - mean or weighted mean of point set y.x 얻어
-# - cross-covariance matrix H 교차 공분산 얻어
-# - SVD 결과 통해 rotation matrix 얻음
-# 
-# ![image-5.png](attachment:image-5.png)
-# - y0 : center of mass of the points at y, weighted mean of this point set y 
-# - x0 : center of mass of the points at x , weighted mean of this point set x
-# 
-# ![image-6.png](attachment:image-6.png)
-# 
-# 
-# ### SVD-Based Alignments
-# 더 자세한 증명, 왜 이렇게 되는가는 영상에서 확인하기
-# ![image-7.png](attachment:image-7.png)
-# 
-# ![image-8.png](attachment:image-8.png)
-# 
-# ![image-9.png](attachment:image-9.png) 
-# 
-# ![image-10.png](attachment:image-10.png)
-# 
-# ## Contents:
-# * [Overview](#Overview)
-# * [ICP based on SVD](#ICP-based-on-SVD)
-# * [Non linear Least squares based ICP](#Non-linear-Least-squares-based-ICP)
-# * [Using point to plane metric with Least Squares ICP](#Using-point-to-plane-metric-with-Least-Squares-ICP)
-# * [Dealing with outliers](#Dealing-with-outliers)
-# 
-# ## Overview
-# Having two scans $P = \{p_i\}$ and $Q = \{q_i\}$ we want to find a transformation (rotation $R$ and translation $t$) to apply to $P$ to match $Q$ as good as possible. In the remainder of this notebook we will try to define what does "as good as possible mean" as well as ways to find such a transformation.
-
-# In[1]:
-
-
 import sys
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib import animation, rc
 from math import sin, cos, atan2, pi
 from IPython.display import display, Math, Latex, Markdown, HTML
-
-
-# ### The way we will plot the data
-
-# In[2]:
-
 
 def plot_data(data_1, data_2, label_1, label_2, markersize_1=8, markersize_2=8):
     fig = plt.figure(figsize=(10, 6))
@@ -141,10 +65,6 @@ def animate_results(P_values, Q, corresp_values, xlim, ylim):
 
 # ### Generate example data
 # Thoughout this notebook we will be working wigh generated data that looks like this:
-
-# In[3]:
-
-
 # initialize pertrubation rotation
 angle = pi / 4
 R_true = np.array([[cos(angle), -sin(angle)], 
@@ -169,10 +89,6 @@ plt.show()
 
 # ### Correspondences computation
 # We compute correspondences from $P$ to $Q$, i.e. for every $p_i$ we search the closest $q_j$ to it.
-
-# In[4]:
-
-
 def get_correspondence_indices(P, Q):
     """For each point in P find closest one in Q."""
     p_size = P.shape[1]
@@ -205,54 +121,7 @@ def draw_correspondeces(P, Q, correspondences, ax):
 
 
 # ## ICP based on SVD
-# 
-# Tldr version. If the scans would match exactly, their cross-covariance would be identity. Therefore, we can iteratively optimize their cross-covariance to be as close as possible to an identity matrix by applying transformations to $P$. Let's dive into details. 
-# 
-# ### Single iteration
-# In a single iteration we assume that the correspondences are known. We can compute the cross-covariance between the corresponding points. Let $C = \{\{i,j\}:p_i \leftrightarrow q_j\}$ be a set of all correspondences, also $|C| = N$. Then, the cross-covariance $K$ is computed as:
-# 
-# \begin{eqnarray}
-# K &=& E [(q_i - \mu_Q)(p_i - \mu_P)^T] \\
-# &=& \frac{1}{N}\sum_{\{i,j\} \in C}{(q_i - \mu_Q)(p_i - \mu_P)^T} \\
-# &\sim& \sum_{\{i,j\} \in C}{(q_i - \mu_Q)(p_i - \mu_P)^T}
-# \end{eqnarray}
-# 
-# Each point has two dimentions, that is $p_i, q_j \in {\rm I\!R}^2$, thus cross-covariance has the form of (we drop indices $i$ and $j$ for notation simplicity):
-# 
-# \begin{equation}
-# K =
-#   \begin{bmatrix}
-#     cov(p_x, q_x) & cov(p_x, q_y) \\
-#     cov(p_y, q_x) & cov(p_y, q_y)
-#   \end{bmatrix}
-# \end{equation}
-# 
-# -----
-# **Intuition:** Intuitevely, cross-covariance tells us how a coordinate of point $q$ changes with the change of $p$ coorinate, i.e. $cov(p_x, q_x)$ tells us how the $x$ coordinate of $q$ will change with the change in $x$ coordinate of $p$ given that the points are corresponding. Ideal cross-covariance matrix is an identity matrix, i.e., we want the $x$ coordinates to be ideally correlated between the scans $P$ and $Q$, while there should be no correlation between the $x$ coorinate of points from $P$ to the $y$ coordinate of points in $Q$. 
-# In our case, however, the position of $P$ is derived from the position of $Q$ through some rotation $R$ and translation $t$. Therefore, whenever we would move the scan $Q$, scan $P$ would move in a related way, but pertrubed through the rotation and translation applied, making the cross-covariance matrix non-identity.
-# 
-# ----
-# 
-# Knowing the cross-covariance we can compute its SVD decomposition:
-# 
-# \begin{equation}
-# \mathrm{SVD}(K) = USV^T
-# \end{equation}
-# 
-# The SVD decomposition gives us how to rotate our data to align it with its prominent direction with $UV^T$ and how to scale it with its singular values $S$. Therefore:
-# 
-# \begin{eqnarray}
-# R &=& UV^T \\
-# t &=& \mu_Q - R \mu_P
-# \end{eqnarray}
-# 
-# #### Let's try this out: ####
-
 # ### Make data centered
-
-# In[5]:
-
-
 def center_data(data, exclude_indices=[]):
     reduced_data = np.delete(data, exclude_indices, axis=1)
     center = np.array([reduced_data.mean(axis=1)]).T
@@ -267,10 +136,6 @@ plt.show()
 
 
 # ### Compute correspondences
-
-# In[6]:
-
-
 correspondences = get_correspondence_indices(P_centered, Q_centered)
 ax = plot_data(P_centered, Q_centered,
                label_1='P centered',
@@ -280,10 +145,6 @@ plt.show()
 
 
 # ### Compute cross covariance
-
-# In[7]:
-
-
 def compute_cross_covariance(P, Q, correspondences, kernel=lambda diff: 1.0):
     cov = np.zeros((2, 2))
     exclude_indices = []
@@ -301,10 +162,6 @@ print(cov)
 
 # ### Find $R$ and $t$ from SVD decomposition
 # Here we find SVD decomposition of the cross covariance matrix and apply the rotation to $Q$
-
-# In[8]:
-
-
 U, S, V_T = np.linalg.svd(cov)
 print(S)
 R_found = U.dot(V_T)
@@ -315,10 +172,6 @@ print("t_found =\n", t_found)
 
 # ### Apply a single correction to $P$ and visualize the result
 # This is the result after just one iteration. Because our correspondences are not optimal, it is not a complete match.
-
-# In[9]:
-
-
 print(t_found)
 print(R_found)
 P_corrected = R_found.dot(P) + t_found
@@ -338,9 +191,6 @@ print("Squared diff: (P_corrected - Q) = ", np.linalg.norm(P_corrected - Q))
 # 
 # ### Working example
 # As we want to work with centered data and we will be iteratively centering the data, searching for rotation on centered data and uncentering the data at the end of each iteration. It is not the most elegant or efficient way, but it allows us to visualize the clouds nicer.
-
-# In[10]:
-
 
 def icp_svd(P, Q, iterations=10, kernel=lambda diff: 1.0):
     """Perform ICP using SVD."""
@@ -377,34 +227,8 @@ print(norm_values)
 animate_results(P_values, Q, corresp_values, xlim=(-5, 35), ylim=(-5, 35))
 
 
-# $\newcommand{\b}[1]{\boldsymbol{\mathrm{#1}}}$
-# $\newcommand{\R}{\boldsymbol{\mathrm{R}}}$
-# $\newcommand{\x}{\boldsymbol{\mathrm{x}}}$
-# $\newcommand{\h}{\boldsymbol{\mathrm{h}}}$
-# $\newcommand{\p}{\boldsymbol{\mathrm{p}}}$
-# $\newcommand{\q}{\boldsymbol{\mathrm{q}}}$
-# $\newcommand{\t}{\boldsymbol{\mathrm{t}}}$
-# $\newcommand{\J}{\boldsymbol{\mathrm{J}}}$
-# $\newcommand{\H}{\boldsymbol{\mathrm{H}}}$
-# $\newcommand{\E}{\boldsymbol{\mathrm{E}}}$
-# $\newcommand{\e}{\boldsymbol{\mathrm{e}}}$
-# $\newcommand{\n}{\boldsymbol{\mathrm{n}}}$
-# $\DeclareMathOperator*{\argmin}{arg\,min}$
-# $\newcommand{\norm}[1]{\left\lVert#1\right\rVert}$
-# # Non-linear Least-squares based ICP #
-# We can alternatively treat every iteration of ICP as a least squares minimization problem. The function we want to minimize is the squared sum of distances between the points of the scans:
-# 
-# \begin{equation}
-# E = \sum_i[\R\p_i + \t - \q_i]^2 \rightarrow \mathrm{min} 
-# \end{equation}
-# 
-# To minimize this function we update the pose $\b{R}$, $\b{t}$ (or alternatively represented as a vector $\b{x} = [x, y, \theta]^T$) to which we need to move scan $P$ to overlap it with a query scan $Q$. It is a non-linear function because of the rotation.
-# 
 # ## Correspondeces ##
 # We look for correspondeces **without** moving the data to ensure zero-mean. Therefore the correspondences look worse than in SVD case, where we first ensured that both scans are zero-mean.
-
-# In[12]:
-
 
 correspondences = get_correspondence_indices(P, Q)
 ax = plot_data(P, Q, "Moved data", "True data")
@@ -413,64 +237,6 @@ plt.show()
 
 
 # ## Minimization ##
-# We define $\p_i \in P$ to be points we want to match against $\q_j \in Q$. By "matching" we mean finding pose $\b{x} = [x, y, \theta]^T$ that minimizes the sum of squared lengths of the correspondences. Pose $\x$ can alternatively be resresented by a rotation matrix $\R = 
-# \begin{bmatrix}
-#     \cos\theta & - \sin\theta \\
-#     \sin\theta & \cos\theta
-# \end{bmatrix}$ and a translation vector $\t = [x, y]^T$. We will keep using these representations interchangibly throughtout these notes. 
-# 
-# We will further use the following notation: $\h_i(\x) = \R_\theta \p_i + \t$ to denote the points from scan $P$ transformed with $\R$ and $\t$. Additionally, we define error function $\e$ to be: 
-# 
-# \begin{eqnarray}
-# \e(\x) &=& \sum_{\{i,j\}\in C}{\e_{i,j}(\x)},\\
-# \e_{i,j}(\x) &=& \h_i(\x) - \q_j = \R_\theta \p_i + \t - \q_j
-# \end{eqnarray}
-# 
-# 
-# This allows us to formulate the minimization problem as follows:
-# 
-# \begin{eqnarray}
-# \b{x}_{query} 
-# &=& \argmin_{\x}\{\E(\x)\} \\
-# &=& \argmin_{\x}\{\sum_{\{i, j\} \in C}{\norm{\e_{i,j}(\x)}^2}\} \\ 
-# &=& \argmin_{\x}\{\sum_{\{i, j\} \in C}{\norm{\b{h}_i(\x) - \q_j}^2}\}
-# \end{eqnarray}
-
-# ### Gauss Newton Method ###
-# We will be using Gauss Newton method for computing the least squares solution of our non-linear problem. We therefore linearize our function in the vicinity of $\x$. Solving non-linear least squares is equivalent to solving the following system of equations:
-# 
-# \begin{equation}
-# \H \Delta \x = - \E^\prime(\x),
-# \end{equation}
-# 
-# where $\Delta \x$ is the increment of the argument ($[\Delta x, \Delta y, \Delta \theta]$ in our case), $\H$ is the Hessian of $\E$ and $\E^\prime(\x)$ is the derivative over the function we are trying to minimize. 
-# We compute the gradient $\E^\prime(\x)$ as follows:
-# 
-# \begin{equation}
-# \E^\prime(\x) = \J(\x) \e(\x)
-# \end{equation}
-# 
-# In Gauss-Newton method we linearize the function around the considered point, which allows us to compute the Hessian as simple as: $\H = \J(\x)^T \J(\x)$
-# 
-# #### Jacobian ####
-# Both the Hessian and the gradient require the computation of a Jacobian. To compute a Jacobian we need a derivative of a rotation matrix:
-# 
-# \begin{equation}
-# \R_\theta^\prime
-# =\frac{\partial}{\partial \theta}
-#   \begin{bmatrix}
-#     \cos\theta & - \sin\theta \\
-#     \sin\theta & \cos\theta
-#   \end{bmatrix}
-# =\begin{bmatrix}
-#     -\sin\theta & - \cos\theta \\
-#     \cos\theta & -\sin\theta
-#   \end{bmatrix}
-# \end{equation}
-
-# In[13]:
-
-
 def dR(theta):
     return np.array([[-sin(theta), -cos(theta)],
                      [cos(theta),  -sin(theta)]])
@@ -481,21 +247,6 @@ def R(theta):
 
 
 # Now we have everything to compute the Jacobian $\b{J}$ as follows:
-# 
-# \begin{eqnarray}
-# \b{J} = \frac{\partial \e_{i,j}(\x)}{\partial \x} = \frac{\partial \h_i(\x)}{\partial \x} 
-# &=& \Big(\frac{\partial \h_i(\x)}{\partial x}, \frac{\partial \h_i(\x)}{\partial y}, \frac{\partial \h_i(\x)}{\partial \theta}\Big) \\ 
-# &=&\Big(\b{I}, \R_\theta^\prime \p_i \Big) \\ 
-# &=&
-# \begin{bmatrix}
-#     1 & 0 & -\sin\theta\ p_i^x - \cos\theta\ p_i^y \\
-#     0 & 1 & \cos\theta\ p_i^x - \sin\theta\ p_i^y
-# \end{bmatrix}
-# \end{eqnarray}
-
-# In[14]:
-
-
 def jacobian(x, p_point):
     theta = x[2]
     J = np.zeros((2, 3))
@@ -511,41 +262,6 @@ def error(x, p_point, q_point):
 
 
 # ## Solving the Least Squares problem
-# Now that we know how to compute the Jacobian, we can compute the system of equations, solving which delivers the solution to our problem. We initialize Hessian $\H$ and gradient $\b{g}$ by zeros:
-# 
-# \begin{equation}
-# \b{H} = 
-# \begin{bmatrix}
-#     0 & 0 & 0 \\
-#     0 & 0 & 0 \\
-#     0 & 0 & 0
-# \end{bmatrix}, \ 
-# \b{g} = 
-# \begin{bmatrix}
-#     0 \\
-#     0 \\
-#     0
-# \end{bmatrix} \ 
-# \end{equation}
-# 
-# We now need to construct a system of equations solving which would give us the relative pose. **For every corresponding pair of points** do the following:
-# 
-# \begin{eqnarray}
-# \H &\rightarrow& \b{H} + \J^T \J \\
-# \b{g} &\rightarrow& \b{g} + \J^T \e
-# \end{eqnarray}
-# 
-# Now that the system of equation is ready, we can find the $\Delta\b{x}$ - the solution to the least squares problem:
-# 
-# \begin{equation}
-# \H \Delta\x = -\b{g} \Longrightarrow \Delta\x = -\b{H}^{-1}\b{g}
-# \end{equation}
-# 
-# This can be solved without actually inverting the matrix in reality.
-
-# In[15]:
-
-
 def prepare_system(x, P, Q, correspondences, kernel=lambda distance: 1.0):
     H = np.zeros((3, 3))
     g = np.zeros((3, 1))
@@ -592,23 +308,10 @@ print(chi_values)
 
 
 # ### Animate the result
-
-# In[16]:
-
-
 animate_results(P_values, Q, corresp_values, xlim=(-10, 35), ylim=(-10, 30))
 
 
 # # Using point to plane metric with Least Squares ICP
-# Point to point metric used before is not really the most optimal as can be seen above. It takes quite some iterations for the solution to converge. There is another metric which seems to work better. It is called "point to plane" metric. The idea here is that we still find the closest point, but the error is defined as a projection of the error onto the direction of the normal shot from the found point.
-# 
-# To start, we need to compute the normals of the resulting cloud.
-# 
-# The normal in this 2D case is simple to compute. For a vector $v = [x, y]^\top$ the normal is a vector $n_v = [-y, x]^\top$ as can be shown geometrically. 
-
-# In[17]:
-
-
 def compute_normals(points, step=1):
     normals = [np.array([[0, 0]])]
     normals_at_points = []
@@ -643,20 +346,6 @@ plt.show()
 
 
 # ## Point to plane error metric
-# 
-# The error that we minimize is different. Before we minimized the Euclidean error between the 2 points, now we minimize this error projected onto the normal vector of one of the points.
-# 
-# \begin{equation}
-# E = \sum_i (\n_i \cdot (\R_\theta \p_i + \t - \q_j))^2 \rightarrow \mathrm{min},
-# \end{equation}
-# 
-# here $\n_i$ is the normal direction at the point $\q_i$. This leads to a changed jacobian that is not $2 \times 3$ as before, but $1 \times 3$.
-# 
-# ## Point to plane Jacobian
-
-# In[18]:
-
-
 from sympy import init_printing, symbols, Matrix, cos as s_cos, sin as s_sin, diff
 init_printing(use_unicode = True)
 
@@ -680,12 +369,6 @@ display(Latex("Point to plane Jacobian: "), J_normal)
 
 
 # ## Faster convergence
-# 
-# This changes very little in the optimization procedure, but the convergence rate is much better.
-
-# In[19]:
-
-
 def prepare_system_normals(x, P, Q, correspondences, Q_normals):
     H = np.zeros((3, 3))
     g = np.zeros((3, 1))
@@ -730,37 +413,21 @@ P_values, chi_values, corresp_values = icp_normal(P, Q, Q_normals)
 plot_values(chi_values, label="chi^2")
 
 
-# In[20]:
-
 
 animate_results(P_values, Q, corresp_values, xlim=(-10, 35), ylim=(-10, 20))
 
 
 # # Dealing with outliers
-# If we corrupt our data, it gets harder for all of these algorithms to reason about it. 
-# 
-# Let's say, there is a couple pretty bad outliers in the $P$ data:
-
-# In[21]:
-
 
 # Introduce an outlier.
 P_outliers = P.copy()
 P_outliers[:, 10] = np.array([-10, 30])
 P_outliers[:, 20] = np.array([0, 40])
 
-
-# In[22]:
-
-
 center_of_P_outliers = np.array([P_outliers.mean(axis=1)]).T
 center_of_Q = np.array([Q.mean(axis=1)]).T
 P_centered_outliers = P_outliers - center_of_P_outliers
 Q_centered = Q - center_of_Q
-
-
-# In[23]:
-
 
 correspondences = get_correspondence_indices(P_centered_outliers, Q_centered)
 ax = plot_data(P_centered_outliers, Q_centered,
@@ -771,30 +438,15 @@ plt.show()
 
 
 # ## We cannot just run our methods without modification
-# If we try to run any of the methods above without modification, they will fail as the outliers will "drag" the solution away from the one that looks visually the best. That is because the outliers generate quite a big error that becomes part of the optimization process, which tries to satisfy these new constraints.
-# 
-# #### Let's see what will happen if we just use the vanilla point-to-point ICP
-
-# In[24]:
-
-
 P_values, chi_values, corresp_values = icp_least_squares(P_outliers, Q)
 plot_values(chi_values, label="chi^2")
 animate_results(P_values, Q, corresp_values, xlim=(-5, 35), ylim=(-10, 30))
 
 
 # #### What about the point-to-plane ICP?
-
-# In[25]:
-
-
 P_values, chi_values, corresp_values = icp_normal(P_outliers, Q, Q_normals, iterations=30)
 plot_values(chi_values, label="chi^2")
 animate_results(P_values, Q, corresp_values, xlim=(-5, 35), ylim=(-10, 30))
-
-
-# In[26]:
-
 
 P_values, norm_values, corresp_values = icp_svd(P_outliers, Q)
 plot_values(norm_values, label="Norm values")
@@ -802,17 +454,6 @@ animate_results(P_values, Q, corresp_values, xlim=(-5, 35), ylim=(-10, 30))
 
 
 # ### All three methods fail without an adaptation
-# As we can see, all methods failed to converge to a good-looking solution just as we have predicted. So what can we do about it?
-# 
-# ## Robust kernels to give outliers less weight
-# There is a notion of "robust kernels" that are usually used for dealing with outliers. The idea is simple: we want to reduce the influence of the data that we deem "bad" on the final solution. There is a lot of different kernels that one might use and looking at all of them is beyong the scope of this notebook.
-# 
-# #### Let's see them in practice
-# In this example, I will use an extremely simple kernel (not the best in general, but quite good for the sake of example). The kernel takes in the value of an error and returns a weight of $1$ if the error is below threshold and $0$ if it is above. Basically, it is a way of saying "I don't care about anything that is way too far away". Usually a less strict version of the kernel is used, but the idea is similar.
-
-# In[27]:
-
-
 from functools import partial
 def kernel(threshold, error):
     if np.linalg.norm(error) < threshold:
@@ -825,31 +466,7 @@ plot_values(chi_values, label="chi^2")
 animate_results(P_values, Q, corresp_values, xlim=(-5, 35), ylim=(-10, 30))
 
 
-# ## Yay!
-# We can see that our trick has worked! The kernel downweighted the outliers and while they still have a correspondence, because they generate way too big of an error we disregard them in the optimization.
-
-# ## Can we remove outliers using ICP based on SVD?
-# Yes and no. SVD-based ICP has two steps: centering the data using its mean and optimizing the rotation. Let's looks at both starting with the rotational part.
-# 
-# #### Rotational part
-# It is relatively simple to remove the outliers during the rotation optimization. Each point contributes to the update of the cross-covariance matrix. We can weight this contribution based on the provided kernel. With the kernel presented above we can exclude points that are too far apart from contributing to the update of the cross-covariance matrix, thus, removing them from the optimization. 
-# 
-# #### Translational part
-# This is the tricky part. As centering the data happens *before* we estimate correspondences and we define the outliers by the length of the correspondence, there is no way to know which of the data points are outliers. If we do nothing about it, we will *always* have a drift after the optimization. I don't know a nice solution to this, but we can apply a hacky one. We could do the following:
-# - Find the first mean as if there were no outliers
-# - While performing rotation on that iteration, mark the points that are outliers (now we have correspondences and can do this)
-# - Apply the found rotation and translation
-# - Repeat the procedure excluding the marked outlier points from computing the mean.
-# 
-# #### Let's see how this trick performs:
-
-# In[28]:
-
-
 P_values, norm_values, corresp_values = icp_svd(P_outliers, Q, kernel=partial(kernel, 10))
 plot_values(norm_values, label="Norm values")
 animate_results(P_values, Q, corresp_values, xlim=(-5, 35), ylim=(-10, 30))
 
-
-# ## Yay again!
-# We can see that this trick works too! Only the first translation is affected by the outliers and the method converges to a relatively good solution.
